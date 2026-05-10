@@ -1,15 +1,26 @@
-assemblies_dir: "../experiments/preprocess/test_assemblies"
-extension: ".fa"
-reference_genome: "../experiments/preprocess/data/ref/pao1.gbff"
-unitig_list: "../experiments/preprocess/unitig_query_files/imipenem_unitigs.txt"
+# 输入数据目录（包含所有.fasta基因组文件）
+assemblies_dir: "../data/extracted_unitigs"
+
+# 参考基因组文件（PAO1）
+reference_genome: "../data/reference/PAO1.fasta"
+
+# Elastic Net选择的unitig列表
+unitig_list: "../data/selected_unitigs.txt"
+
+# AMR基因在参考基因组上的位置文件
+position_fp: "../data/gene_positions.csv"
+
+# VCF变异文件目录（用于计算SNP距离矩阵）
+vcf_dir: "../data/vcf"
+
+# 输出结果目录
+output_dir: "../experiments/preprocess/results"
+
+# 保留的边比例（原作者用0.01）
 keep_proportion: 0.01
 
-fcgr:
-  position_fp: "../experiments/preprocess/data/gene_positions.csv"
-  kmer_size: 7
-  contig_id: "AE004091"
+# k-mer大小（原作者用7）
+kmer_size: 7
 
-outdir:
-  node_features: "../experiments/preprocess/results/node_features"
-  variants: "../experiments/preprocess/results/variants"
-  edge_matrices: "../experiments/preprocess/results/edge_matrices"
+# 参考基因组contig ID
+contig_id: "AE004091"
