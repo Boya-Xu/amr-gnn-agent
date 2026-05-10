@@ -1,52 +1,55 @@
-# app.py
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import uvicorn
-import sys
-from pathlib import Path
-import traceback
+from typing import List
+import warnings
 
-# 添加项目根目录到 Python 路径
-sys.path.append(str(Path(__file__).parent))
+# 抑制pkg_resources过时警告
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="pkg_resources")
 
+# 修正导入路径：从src.predict导入
 from src.predict import get_prediction
 
-app = FastAPI(title="耐药性预测API", description="AMR-GNN 预测服务")
+# 初始化FastAPI应用
+app = FastAPI(
+    title="AMR-GNN细菌耐药性预测API",
+    version="1.0.0",
+    description="基于多表示图神经网络的抗菌药物耐药性预测服务，支持铜绿假单胞菌、大肠杆菌等多种病原体"
+)
 
+# 严格的请求体模型
 class PredictRequest(BaseModel):
-    feature_path: str
-    antibiotic: str
-    isolate_ids: list = None
+    feature_path: str = "./data/extracted_unitigs"
+    antibiotic: str = "vancomycin"
 
+# 严格的响应体模型（明确每个字段的类型）
 class PredictResponse(BaseModel):
-    y_proba: list
-    y_pred: list
-    isolate_ids: list = None
+    y_proba: List[List[float]]  # 二维数组：[[敏感概率, 耐药概率], ...]
+    y_pred: List[int]           # 预测标签：0=敏感，1=耐药
+    isolate_ids: List[str]      # 菌株ID列表
 
-@app.post("/predict", response_model=PredictResponse)
+# 健康检查接口
+@app.get("/health", summary="服务健康检查", tags=["系统接口"])
+async def health_check():
+    return {"status": "ok", "message": "AMR-GNN服务运行正常"}
+
+# 核心预测接口
+@app.post("/predict", summary="耐药性预测", tags=["核心功能"], response_model=PredictResponse)
 async def predict(request: PredictRequest):
     try:
-        print(f"收到预测请求: feature_path={request.feature_path}, antibiotic={request.antibiotic}")
+        # 调用预测函数
         result = get_prediction(
             feature_path=request.feature_path,
-            antibiotic=request.antibiotic,
-            isolate_ids=request.isolate_ids
+            antibiotic=request.antibiotic
         )
-        print("预测成功")
-        return PredictResponse(**result)
-    except FileNotFoundError as e:
-        print(f"文件未找到: {e}")
-        raise HTTPException(status_code=404, detail=str(e))
+        return result
     except Exception as e:
-        print("=" * 50)
-        print("预测失败，错误详情：")
-        traceback.print_exc()
-        print("=" * 50)
-        raise HTTPException(status_code=500, detail=f"预测失败: {str(e)}")
+        # 统一异常处理
+        raise HTTPException(
+            status_code=500,
+            detail=f"预测失败: {str(e)}"
+        )
 
-@app.get("/health")
-def health_check():
-    return {"status": "ok"}
-
+# 启动服务
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)

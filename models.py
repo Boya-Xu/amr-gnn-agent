@@ -34,7 +34,7 @@ class CrossAttention(nn.Module):
         inner_dim = dim_head * heads
         context_dim = default(context_dim, query_dim)
 
-        self.scale = dim_head**-0.5
+        self.scale = dim_head ** -0.5
         self.heads = heads
 
         self.to_q = nn.Linear(query_dim, inner_dim, bias=False)
@@ -124,8 +124,8 @@ class LMF(nn.Module):
 
         # use linear transformation instead of simple summation, more flexibility
         output = (
-            torch.matmul(self.fusion_weights, fusion_zy.permute(1, 0, 2)).squeeze()
-            + self.fusion_bias
+                torch.matmul(self.fusion_weights, fusion_zy.permute(1, 0, 2)).squeeze()
+                + self.fusion_bias
         )
         output = output.view(-1, self.output_dim)
         return output
@@ -216,33 +216,41 @@ class GNNModel(nn.Module):
             )
 
     def forward(self, x, edge_index_1, edge_index_2):
-        # 第一个图的前向传播
-        x_1 = x
-        for layer in self.layers_1:
-            if isinstance(layer, geom_nn.MessagePassing):
-                x_1 = layer(x_1, edge_index_1)
+        x_1 = x.clone()
+        x_2 = x.clone()
+        for layer_1 in self.layers_1:
+            if isinstance(layer_1, geom_nn.MessagePassing):
+                x_1 = layer_1(x_1, edge_index_1)
             else:
-                x_1 = layer(x_1)
-
-        # 第二个图的前向传播
-        x_2 = x
-        for layer in self.layers_2:
-            if isinstance(layer, geom_nn.MessagePassing):
-                x_2 = layer(x_2, edge_index_2)
+                x_1 = layer_1(x_1)
+        for layer_2 in self.layers_2:
+            if isinstance(layer_2, geom_nn.MessagePassing):
+                x_2 = layer_2(x_2, edge_index_2)
             else:
-                x_2 = layer(x_2)
+                x_2 = layer_2(x_2)
 
-        # 融合两个图的表示
         if self.middle_layer == "cross_attn":
-            x_1 = x_1.unsqueeze(dim=1)
-            x_2 = x_2.unsqueeze(dim=1)
-            x = self.middle_layers(x_1, context=x_2).squeeze(dim=1)
+            assert (len(x_1.size()) == 2) and (len(x_2.size()) == 2), (
+                "Invalid input shape for Cross Attention"
+            )
+            x_1 = x_1.unsqueeze(dim=1)  # (B, D) -> (B, 1, D)
+            x_2 = x_2.unsqueeze(dim=1)  # (B, D) -> (B, 1, D)
+            x = self.middle_layers(x_1, context=x_2).squeeze(
+                dim=1
+            )  # (B, 1, D) -> (B, D)
             x = self.classification_head(x)
         elif self.middle_layer == "dual_cross_attn":
-            x_1 = x_1.unsqueeze(dim=1)
-            x_2 = x_2.unsqueeze(dim=1)
-            out_1 = self.middle_layers_1(x_1, context=x_2).squeeze(dim=1)
-            out_2 = self.middle_layers_2(x_2, context=x_1).squeeze(dim=1)
+            assert (len(x_1.size()) == 2) and (len(x_2.size()) == 2), (
+                "Invalid input shape for Cross Attention"
+            )
+            x_1 = x_1.unsqueeze(dim=1)  # (B, D) -> (B, 1, D)
+            x_2 = x_2.unsqueeze(dim=1)  # (B, D) -> (B, 1, D)
+            out_1 = self.middle_layers_1(x_1, context=x_2).squeeze(
+                dim=1
+            )  # (B, 1, D) -> (B, D)
+            out_2 = self.middle_layers_2(x_2, context=x_1).squeeze(
+                dim=1
+            )  # (B, 1, D) -> (B, D)
             x = torch.cat([out_1, out_2], dim=-1)
             x = self.classification_head(x)
         elif self.middle_layer == "low_rank_fusion":
@@ -251,11 +259,10 @@ class GNNModel(nn.Module):
             if self.middle_layer == "mean":
                 x = torch.stack([x_1, x_2], dim=-1).mean(dim=-1)
             elif self.middle_layer == "max":
-                x = torch.stack([x_1, x_2], dim=-1).max(dim=-1)
-            else:  # concat or simple
+                x = torch.stack([x_1, x_2], dim=-1).max(dim=-1)[0]  # 修复max返回元组的bug
+            else:
                 x = torch.cat([x_1, x_2], dim=-1)
             x = self.middle_layers(x)
-
         return x
 
 
@@ -287,18 +294,34 @@ class AMRNodeDualGNN(L.LightningModule):
             "y_proba": None,
         }
 
-    def forward(self, data, mode="predict"):
+    def forward(self, data, mode="train"):
+        # 核心前向传播（所有模式通用）
         x, edge_index_1, edge_index_2 = data.x, data.edge_index_1, data.edge_index_2
-        # 1. 模型核心计算：这部分必须始终执行
         y_hat = self.model(x, edge_index_1, edge_index_2)
         y_hat = nn.Sigmoid()(y_hat)
-        
-        # 2. 处理预测模式（你的API调用会进入此分支）
-        if mode == "predict":
-            # 预测时，直接返回模型的计算结果
-            return y_hat, None
 
-        # 3. 以下是训练/验证/测试模式的逻辑
+        # ========== 终极防护：自动检测预测模式 ==========
+        # 如果没有标签数据，或者明确指定了predict模式，都按预测模式处理
+        if mode == "predict" or not hasattr(data, 'y') or data.y is None:
+            # 仅保存预测结果，跳过所有loss/auroc计算
+            mask = data.predict_mask if hasattr(data, 'predict_mask') else torch.ones(len(y_hat), dtype=torch.bool,
+                                                                                      device=y_hat.device)
+            tmp_ids = data.ids[mask].cpu().numpy().astype(int) if hasattr(data, 'ids') else np.arange(len(y_hat))
+            isolate_ids = np.array(data.isolate_codes).reshape(-1, ) if hasattr(data,
+                                                                                'isolate_codes') else tmp_ids.astype(
+                str)
+            tmp_isolate_ids = isolate_ids.copy()[tmp_ids]
+            tmp_proba = y_hat[mask].squeeze().cpu().numpy()
+
+            if self.results["y_proba"] is None:
+                self.results["isolate_id"] = tmp_isolate_ids
+                self.results["y_proba"] = tmp_proba
+            else:
+                self.results["isolate_id"] = np.concatenate([self.results["isolate_id"], tmp_isolate_ids])
+                self.results["y_proba"] = np.concatenate([self.results["y_proba"], tmp_proba])
+            return y_hat
+
+        # 训练/验证/测试模式：正常计算损失和指标
         if mode == "train":
             mask = data.train_mask
         elif mode == "val":
@@ -306,14 +329,15 @@ class AMRNodeDualGNN(L.LightningModule):
         elif mode == "test":
             mask = data.test_mask
         else:
-            mask = slice(None)
-            
+            assert False, f"Unknown forward mode: {mode}"
+
         loss = self.loss_fn(y_hat[mask], data.y[mask].float())
         auroc = self.auroc_fn(y_hat[mask], data.y[mask])
 
-        if mode in ["test"]:
+        # 测试模式保存结果
+        if mode == "test":
             tmp_ids = data.ids[mask].cpu().numpy().astype(int)
-            isolate_ids = np.array(data.isolate_codes).reshape(-1)
+            isolate_ids = np.array(data.isolate_codes).reshape(-1, )
             tmp_isolate_ids = isolate_ids.copy()[tmp_ids]
             tmp_proba = y_hat[mask].squeeze().cpu().numpy()
             tmp_targets = data.y[mask].squeeze().cpu().numpy()
@@ -323,16 +347,9 @@ class AMRNodeDualGNN(L.LightningModule):
                 self.results["y_true"] = tmp_targets
                 self.results["y_proba"] = tmp_proba
             else:
-                self.results["isolate_id"] = np.concatenate(
-                    [self.results["isolate_id"], tmp_isolate_ids]
-                )
-                self.results["y_true"] = np.concatenate(
-                    [self.results["y_true"], tmp_targets]
-                )
-                self.results["y_proba"] = np.concatenate(
-                    [self.results["y_proba"], tmp_proba]
-                )
-            
+                self.results["isolate_id"] = np.concatenate([self.results["isolate_id"], tmp_isolate_ids])
+                self.results["y_true"] = np.concatenate([self.results["y_true"], tmp_targets])
+                self.results["y_proba"] = np.concatenate([self.results["y_proba"], tmp_proba])
         return loss, auroc
 
     def configure_optimizers(self):
@@ -362,9 +379,10 @@ class AMRNodeDualGNN(L.LightningModule):
         df["y_pred"] = df["y_proba"].apply(
             lambda x: "Resistant" if x > 0.5 else "Susceptible"
         )
-        df["y_true"] = df["y_true"].apply(
-            lambda x: "Resistant" if x == 1 else "Susceptible"
-        )
+        if "y_true" in df.columns:
+            df["y_true"] = df["y_true"].apply(
+                lambda x: "Resistant" if x == 1 else "Susceptible"
+            )
         rename_dict = {
             "y_true": f"True AST ({self.cfg.data.antimicrobial.capitalize()})",
             "y_pred": f"Predicted AST ({self.cfg.data.antimicrobial.capitalize()})",
@@ -381,10 +399,14 @@ class AMRNodeDualGNN(L.LightningModule):
         self._generate_results(result_df, out_fp)
 
     def predict_step(self, batch, batch_idx):
-        loss, auroc = self.forward(batch, mode="predict")
-        return loss
+        # 预测步骤仅获取结果，不计算任何损失
+        return self.forward(batch, mode="predict")
 
     def on_predict_end(self):
         out_fp = os.path.join(self.cfg.prediction.outdir, "prediction_results.csv")
-        result_df = pd.DataFrame(self.results)
+        # 预测模式无真实标签，过滤后生成结果
+        result_df = pd.DataFrame({
+            "isolate_id": self.results["isolate_id"],
+            "y_proba": self.results["y_proba"]
+        })
         self._generate_results(result_df, out_fp)

@@ -1,0 +1,53 @@
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from predict import get_prediction  # ✅ 正确导入根目录的predict函数
+
+# 初始化FastAPI应用
+app = FastAPI(
+    title="耐药性预测API",
+    version="0.1.0",
+    description="基于AMR-GNN图神经网络的细菌抗菌药物耐药性预测服务"
+)
+
+
+# 定义请求体模型
+class PredictRequest(BaseModel):
+    feature_path: str
+    antibiotic: str
+
+
+# 定义响应体模型
+class PredictResponse(BaseModel):
+    y_proba: list
+    y_pred: list
+    isolate_ids: list
+
+
+# 健康检查接口
+@app.get("/health", summary="健康检查")
+async def health_check():
+    return {"status": "ok"}
+
+
+# 核心预测接口
+@app.post("/predict", summary="耐药性预测", response_model=PredictResponse)
+async def predict(request: PredictRequest):
+    try:
+        # 调用预测函数
+        result = get_prediction(
+            feature_path=request.feature_path,
+            antibiotic=request.antibiotic
+        )
+        return result
+    except Exception as e:
+        # 统一异常处理
+        raise HTTPException(
+            status_code=500,
+            detail=f"预测失败: {str(e)}"
+        )
+
+
+# 启动服务（可选，直接用uvicorn命令启动更推荐）
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)

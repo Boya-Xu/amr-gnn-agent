@@ -1,11 +1,13 @@
 import os
 import tempfile
 import torch
+import numpy as np
 import torch_geometric.loader as geom_loader
 from hydra import compose, initialize
 from src.models import AMRNodeDualGNN
 from src.utils import create_graph_dataset
 import glob
+
 
 def get_prediction(feature_path: str, antibiotic: str, isolate_ids: list = None) -> dict:
     """
@@ -19,23 +21,22 @@ def get_prediction(feature_path: str, antibiotic: str, isolate_ids: list = None)
     Returns:
         dict: {"y_proba": [...], "y_pred": [...], "isolate_ids": [...]}
     """
-    # ========== 新增：将相对路径转换为绝对路径（基于当前文件所在的项目根目录） ==========
+    # ========== 相对路径转绝对路径（基于当前文件所在的项目根目录） ==========
     if feature_path.startswith('./'):
-        # 获取当前文件（即该脚本）所在目录，假设脚本放在项目根目录
         current_dir = os.path.dirname(os.path.abspath(__file__))
         feature_path = os.path.join(current_dir, feature_path.lstrip('./'))
     elif not os.path.isabs(feature_path):
-        # 如果是其他形式的相对路径，可类似处理
         current_dir = os.path.dirname(os.path.abspath(__file__))
         feature_path = os.path.join(current_dir, feature_path)
     # =================================================================================
 
-    # 1. 构建临时配置
+    # 1. 构建临时配置（所有参数名与原论文/配置文件完全一致）
     overrides = [
         f"data.input_dir={feature_path}",
         f"data.antimicrobial={antibiotic}",
         "data.labels=data/ast_labels.csv",
         "data.whole_ids=data/whole.ids",
+        "data.predict_ids=data/predict.ids",
         "adj_matrix.file_path_1=data/fcgr_adj_matrix.csv",
         "adj_matrix.file_path_2=data/snps_adj_matrix.csv",
         "trainer.model_checkpoint.dirpath=experiments/checkpoints",
@@ -49,10 +50,16 @@ def get_prediction(feature_path: str, antibiotic: str, isolate_ids: list = None)
         overrides.append(f"data.predict_ids={temp_ids_file}")
 
     try:
-        with initialize(version_base=None, config_path="../conf"):
+        with initialize(version_base=None, config_path="conf"):
             cfg = compose(config_name="config", overrides=overrides)
 
         dataset, adj_mat_1, adj_mat_2 = create_graph_dataset(cfg)
+
+        # ✅ 关键修复：手动添加预测模式下缺失的train_mask属性
+        if not hasattr(dataset, 'train_mask'):
+            # 创建一个全False的train_mask，形状和标签y相同
+            dataset.train_mask = torch.zeros_like(dataset.y, dtype=torch.bool)
+
         loader = geom_loader.DataLoader([dataset], batch_size=1)
 
         checkpoint_dir = cfg.trainer.model_checkpoint.dirpath
@@ -71,11 +78,17 @@ def get_prediction(feature_path: str, antibiotic: str, isolate_ids: list = None)
 
         all_probs = []
         all_preds = []
+        result_isolate_ids = []
 
         with torch.no_grad():
             for batch in loader:
                 batch = batch.to(model.device)
-                output = model(batch)
+
+                # ✅ 双重保险：给batch也添加train_mask属性
+                if not hasattr(batch, 'train_mask'):
+                    batch.train_mask = torch.zeros_like(batch.y, dtype=torch.bool)
+
+                output = model(batch, mode="predict")
                 if isinstance(output, (tuple, list)):
                     logits = output[0]
                 else:
@@ -88,6 +101,9 @@ def get_prediction(feature_path: str, antibiotic: str, isolate_ids: list = None)
                 preds = torch.argmax(probs, dim=1)
                 all_probs.append(probs.cpu().numpy())
                 all_preds.append(preds.cpu().numpy())
+                # 提取菌株ID
+                if hasattr(batch, 'isolate_ids'):
+                    result_isolate_ids.extend(batch.isolate_ids)
 
         if all_probs:
             y_proba = np.concatenate(all_probs, axis=0).tolist()
@@ -99,8 +115,15 @@ def get_prediction(feature_path: str, antibiotic: str, isolate_ids: list = None)
         return {
             "y_proba": y_proba,
             "y_pred": y_pred,
-            "isolate_ids": []
+            "isolate_ids": result_isolate_ids if result_isolate_ids else isolate_ids
         }
     finally:
         if temp_ids_file and os.path.exists(temp_ids_file):
             os.unlink(temp_ids_file)
+
+
+# 保留命令行测试入口
+if __name__ == "__main__":
+    # 本地测试用
+    result = get_prediction("./data/extracted_unitigs", "vancomycin")
+    print("预测结果：", result)

@@ -34,7 +34,7 @@ class CrossAttention(nn.Module):
         inner_dim = dim_head * heads
         context_dim = default(context_dim, query_dim)
 
-        self.scale = dim_head**-0.5
+        self.scale = dim_head ** -0.5
         self.heads = heads
 
         self.to_q = nn.Linear(query_dim, inner_dim, bias=False)
@@ -124,8 +124,8 @@ class LMF(nn.Module):
 
         # use linear transformation instead of simple summation, more flexibility
         output = (
-            torch.matmul(self.fusion_weights, fusion_zy.permute(1, 0, 2)).squeeze()
-            + self.fusion_bias
+                torch.matmul(self.fusion_weights, fusion_zy.permute(1, 0, 2)).squeeze()
+                + self.fusion_bias
         )
         output = output.view(-1, self.output_dim)
         return output
@@ -259,7 +259,7 @@ class GNNModel(nn.Module):
             if self.middle_layer == "mean":
                 x = torch.stack([x_1, x_2], dim=-1).mean(dim=-1)
             elif self.middle_layer == "max":
-                x = torch.stack([x_1, x_2], dim=-1).max(dim=-1)
+                x = torch.stack([x_1, x_2], dim=-1).max(dim=-1)[0]  # 修复max返回元组的bug
             else:
                 x = torch.cat([x_1, x_2], dim=-1)
             x = self.middle_layers(x)
@@ -295,29 +295,45 @@ class AMRNodeDualGNN(L.LightningModule):
         }
 
     def forward(self, data, mode="train"):
+        # 核心前向传播（所有模式通用）
         x, edge_index_1, edge_index_2 = data.x, data.edge_index_1, data.edge_index_2
         y_hat = self.model(x, edge_index_1, edge_index_2)
         y_hat = nn.Sigmoid()(y_hat)
 
+        # ========== 终极修复：PREDICT模式直接返回，不执行任何后续代码 ==========
+        if mode == "predict":
+            # 仅保存预测结果，跳过所有loss/auroc计算
+            mask = data.predict_mask
+            tmp_ids = data.ids[mask].cpu().numpy().astype(int)
+            isolate_ids = np.array(data.isolate_codes).reshape(-1, )
+            tmp_isolate_ids = isolate_ids.copy()[tmp_ids]
+            tmp_proba = y_hat[mask].squeeze().cpu().numpy()
+
+            if self.results["y_proba"] is None:
+                self.results["isolate_id"] = tmp_isolate_ids
+                self.results["y_proba"] = tmp_proba
+            else:
+                self.results["isolate_id"] = np.concatenate([self.results["isolate_id"], tmp_isolate_ids])
+                self.results["y_proba"] = np.concatenate([self.results["y_proba"], tmp_proba])
+            return y_hat
+
+        # 训练/验证/测试模式：正常计算损失和指标
         if mode == "train":
             mask = data.train_mask
         elif mode == "val":
             mask = data.val_mask
         elif mode == "test":
             mask = data.test_mask
-        elif mode == "predict":
-            mask = data.predict_mask
         else:
             assert False, f"Unknown forward mode: {mode}"
 
         loss = self.loss_fn(y_hat[mask], data.y[mask].float())
         auroc = self.auroc_fn(y_hat[mask], data.y[mask])
 
-        if mode in ["test", "predict"]:
+        # 测试模式保存结果
+        if mode == "test":
             tmp_ids = data.ids[mask].cpu().numpy().astype(int)
-            isolate_ids = np.array(data.isolate_codes).reshape(
-                -1,
-            )
+            isolate_ids = np.array(data.isolate_codes).reshape(-1, )
             tmp_isolate_ids = isolate_ids.copy()[tmp_ids]
             tmp_proba = y_hat[mask].squeeze().cpu().numpy()
             tmp_targets = data.y[mask].squeeze().cpu().numpy()
@@ -327,15 +343,9 @@ class AMRNodeDualGNN(L.LightningModule):
                 self.results["y_true"] = tmp_targets
                 self.results["y_proba"] = tmp_proba
             else:
-                self.results["isolate_id"] = np.concatenate(
-                    [self.results["isolate_id"], tmp_isolate_ids]
-                )
-                self.results["y_true"] = np.concatenate(
-                    [self.results["y_true"], tmp_targets]
-                )
-                self.results["y_proba"] = np.concatenate(
-                    [self.results["y_proba"], tmp_proba]
-                )
+                self.results["isolate_id"] = np.concatenate([self.results["isolate_id"], tmp_isolate_ids])
+                self.results["y_true"] = np.concatenate([self.results["y_true"], tmp_targets])
+                self.results["y_proba"] = np.concatenate([self.results["y_proba"], tmp_proba])
         return loss, auroc
 
     def configure_optimizers(self):
@@ -365,9 +375,10 @@ class AMRNodeDualGNN(L.LightningModule):
         df["y_pred"] = df["y_proba"].apply(
             lambda x: "Resistant" if x > 0.5 else "Susceptible"
         )
-        df["y_true"] = df["y_true"].apply(
-            lambda x: "Resistant" if x == 1 else "Susceptible"
-        )
+        if "y_true" in df.columns:
+            df["y_true"] = df["y_true"].apply(
+                lambda x: "Resistant" if x == 1 else "Susceptible"
+            )
         rename_dict = {
             "y_true": f"True AST ({self.cfg.data.antimicrobial.capitalize()})",
             "y_pred": f"Predicted AST ({self.cfg.data.antimicrobial.capitalize()})",
@@ -382,20 +393,16 @@ class AMRNodeDualGNN(L.LightningModule):
         )
         result_df = pd.DataFrame(self.results)
         self._generate_results(result_df, out_fp)
-        # result_df["y_pred"] = result_df["y_proba"].apply(
-        #     lambda x: "resistant" if x > 0.5 else "susceptible"
-        # )
-        # result_df.to_csv(out_fp, index=False)
 
     def predict_step(self, batch, batch_idx):
-        loss, auroc = self.forward(batch, mode="predict")
-        return loss
+        # 预测步骤仅获取结果，不计算任何损失
+        return self.forward(batch, mode="predict")
 
     def on_predict_end(self):
         out_fp = os.path.join(self.cfg.prediction.outdir, "prediction_results.csv")
-        result_df = pd.DataFrame(self.results)
+        # 预测模式无真实标签，过滤后生成结果
+        result_df = pd.DataFrame({
+            "isolate_id": self.results["isolate_id"],
+            "y_proba": self.results["y_proba"]
+        })
         self._generate_results(result_df, out_fp)
-        # result_df["y_pred"] = result_df["y_proba"].apply(
-        #     lambda x: "resistant" if x > 0.5 else "susceptible"
-        # )
-        # result_df.to_csv(out_fp, index=False)
