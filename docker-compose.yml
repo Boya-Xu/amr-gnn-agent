@@ -1,37 +1,11 @@
-version: '3.8'
-
 services:
-  # C同学的模拟预处理服务
-  preprocess:
-    build:
-      context: ./preprocess
-      dockerfile: Dockerfile.preprocess
+  amr-gnn-api:
+    build: .
     ports:
-      - "8001:8001"
+      - "8000:8000"
     volumes:
-      # 把本地的data文件夹挂载到容器里，这样服务能访问到测试数据
       - ./data:/app/data
-
-  # B同学的预测服务
-  predict:
-    build:
-      context: .
-      dockerfile: Dockerfile.predict
-    ports:
-      - "8002:8002"
-    volumes:
-      # 同样挂载data文件夹
-      - ./data:/app/data
-      # 挂载模型文件文件夹（里面有.ckpt权重）
       - ./experiments/checkpoints:/app/experiments/checkpoints
-    # 👇 如果你电脑没有NVIDIA显卡，把下面这5行全部删掉！
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-
-volumes:
-  data:
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1

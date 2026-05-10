@@ -1,0 +1,38 @@
+# Python相关
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 虚拟环境
+.venv/
+venv/
+ENV/
+
+# 大文件（绝对不要打进镜像！）
+data/
+experiments/checkpoints/
+*.ckpt
+*.pth
+*.pt
+*.csv
+*.ids
+
+# 日志和临时文件
+logs/
+*.log
+*.tmp
+*.temp
+
+# IDE和系统文件
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Git相关
+.git/
+.gitignore
+README.md
