@@ -1,0 +1,7 @@
+FROM python:3.10-slim
+WORKDIR /app
+COPY . .
+# 安装uv包管理工具和所有项目依赖
+RUN pip install uv && uv sync
+# 启动预测服务，监听8002端口
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8002"]
