@@ -2,12 +2,17 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List
 import warnings
+from agent import chat_with_agent
 
 # 抑制pkg_resources过时警告
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="pkg_resources")
 
 # 修正导入路径：从src.predict导入
 from src.predict import get_prediction
+
+# 定义前端传过来的数据格式
+class ChatRequest(BaseModel):
+    message: str
 
 # 初始化FastAPI应用
 app = FastAPI(
@@ -48,6 +53,12 @@ async def predict(request: PredictRequest):
             status_code=500,
             detail=f"预测失败: {str(e)}"
         )
+
+@app.post("/api/chat")
+async def agent_chat_endpoint(request: ChatRequest):
+    # 调用 Agent
+    reply = chat_with_agent(request.message)
+    return {"status": "success", "reply": reply}
 
 # 启动服务
 if __name__ == "__main__":
