@@ -1,5 +1,6 @@
 import os
 import requests
+import json
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langchain.tools import tool
@@ -10,6 +11,7 @@ os.environ["OPENAI_BASE_URL"] = "https://api.deepseek.com/v1"
 
 llm = ChatOpenAI(model="deepseek-chat", temperature=0)
 
+
 # ================= 2. 定义工具 (Tools) =================
 @tool
 def preprocess_fasta_tool(file_path: str) -> str:
@@ -19,27 +21,41 @@ def preprocess_fasta_tool(file_path: str) -> str:
     """
     url = "https://brick-glitch-sculptor.ngrok-free.dev/preprocess"
     try:
-        response = requests.post(url, json={"file_path": file_path})
+        # 读取本地文件，以 multipart/form-data 格式上传
+        with open(file_path, 'rb') as f:
+            files = {'file': (file_path, f, 'application/octet-stream')}
+            response = requests.post(url, files=files)
         if response.status_code == 200:
             return f"预处理成功，特征文件已就绪。详细信息: {response.text}"
-        return f"预处理失败，状态码: {response.status_code}"
+        return f"预处理失败，状态码: {response.status_code}, 详情: {response.text}"
+    except FileNotFoundError:
+        return f"文件未找到: {file_path}，请确认文件路径是否正确"
     except Exception as e:
         return f"调用预处理接口异常: {str(e)}"
+
 
 @tool
 def predict_amr_tool(antibiotic: str) -> str:
     """
-    当用户询问关于某种抗生素（如 'vancomycin' 或 '万古霉素'）的耐药性预测结果时调用此工具。
+    当用户询问关于某种抗生素的耐药性预测结果时调用此工具。
     注意：必须在预处理成功后才能调用此工具。
+    用户说的“万古霉素”对应参数 antibiotic="vancomycin"
     """
     url = "http://127.0.0.1:8000/predict"
     try:
-        response = requests.post(url, json={"antibiotic": antibiotic})
+        # 明确传 feature_path，并使用 B 接口期望的 antimicrobial 字段
+        response = requests.post(url, json={
+            "feature_path": "./data/extracted_unitigs",
+            "antimicrobial": antibiotic
+        })
         if response.status_code == 200:
-            return f"预测完成。结果数据: {response.json()}"
-        return f"预测失败，状态码: {response.status_code}"
+            # 返回接口原始 JSON 文本，方便后续提取 chart_data
+            return response.text
+        else:
+            return f"预测失败，状态码: {response.status_code}, 详情: {response.text}"
     except Exception as e:
         return f"调用预测接口异常: {str(e)}"
+
 
 tools = [preprocess_fasta_tool, predict_amr_tool]
 
@@ -52,25 +68,33 @@ system_prompt = """
 3. 获取预测结果后，请用清晰、专业的中文总结结果（包括耐药概率和最终判定）。
 """
 
-# LangChain 1.x 使用 create_agent，参数为 model, tools, system_prompt
 agent = create_agent(
     model=llm,
     tools=tools,
     system_prompt=system_prompt
 )
 
-# 封装一个对外的函数
-def chat_with_agent(user_message: str) -> str:
+
+def chat_with_agent(user_message: str) -> dict:
     try:
-        # create_agent 返回的是 CompiledStateGraph，用 invoke
         response = agent.invoke({"messages": [{"role": "user", "content": user_message}]})
-        # 提取最后一条 AI 消息
         messages = response.get("messages", [])
+        reply = ""
         if messages:
             last_message = messages[-1]
             if hasattr(last_message, 'content'):
-                return last_message.content
-            return str(last_message)
-        return "Agent 未返回有效响应"
+                reply = last_message.content
+            else:
+                reply = str(last_message)
+
+        chart_data = None
+        for msg in messages:
+            if hasattr(msg, 'name') and msg.name == "predict_amr_tool":
+                try:
+                    chart_data = json.loads(msg.content)
+                except Exception:
+                    pass
+
+        return {"reply": reply, "chart_data": chart_data}
     except Exception as e:
-        return f"Agent 思考过程中出现错误: {str(e)}"
+        return {"reply": f"Agent 思考过程中出现错误: {str(e)}", "chart_data": None}
