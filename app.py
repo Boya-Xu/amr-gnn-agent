@@ -54,11 +54,21 @@ async def predict(request: PredictRequest):
             detail=f"预测失败: {str(e)}"
         )
 
+
 @app.post("/api/chat")
 async def agent_chat_endpoint(request: ChatRequest):
-    # 调用 Agent
-    reply = chat_with_agent(request.message)
-    return {"status": "success", "reply": reply}
+    try:
+        agent_result = chat_with_agent(request.message)
+        return {
+            "status": "success",
+            "reply": agent_result["reply"],
+            "chart_data": agent_result["chart_data"]
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Agent 运行出错: {str(e)}"
+        )
 
 # 启动服务
 if __name__ == "__main__":
