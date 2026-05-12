@@ -4,11 +4,12 @@ from typing import List
 import warnings
 from agent import chat_with_agent
 
-# 抑制pkg_resources过时警告
+# 抑制pkg_resources过期警告
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="pkg_resources")
 
 # 修正导入路径：从src.predict导入
 from src.predict import get_prediction
+from src.explain_api import get_explanation
 
 # 定义前端传过来的数据格式
 class ChatRequest(BaseModel):
@@ -18,7 +19,7 @@ class ChatRequest(BaseModel):
 app = FastAPI(
     title="AMR-GNN细菌耐药性预测API",
     version="1.0.0",
-    description="基于多表示图神经网络的抗菌药物耐药性预测服务，支持铜绿假单胞菌、大肠杆菌等多种病原体"
+    description="基于多表示图神经网络的抗微生物药物耐药性预测服务，支持铜绿假单胞菌、大肠杆菌等多种病原体"
 )
 
 # 严格的请求体模型
@@ -31,6 +32,19 @@ class PredictResponse(BaseModel):
     y_proba: List[List[float]]  # 二维数组：[[敏感概率, 耐药概率], ...]
     y_pred: List[int]           # 预测标签：0=敏感，1=耐药
     isolate_ids: List[str]      # 菌株ID列表
+
+# 解释接口的请求体模型
+class ExplainRequest(BaseModel):
+    feature_path: str = "./data/extracted_unitigs"
+    antibiotic: str = "vancomycin"
+    isolate_ids: list = None
+    n_steps: int = 50
+
+# 解释接口的响应体模型
+class ExplainResponse(BaseModel):
+    isolate_ids: list
+    attributions: list
+    attribution_shape: list
 
 # 健康检查接口
 @app.get("/health", summary="服务健康检查", tags=["系统接口"])
@@ -52,6 +66,26 @@ async def predict(request: PredictRequest):
         raise HTTPException(
             status_code=500,
             detail=f"预测失败: {str(e)}"
+        )
+
+# 特征重要性解释接口（热力图）
+@app.post("/explain", summary="特征重要性解释（热力图）", tags=["核心功能"], response_model=ExplainResponse)
+async def explain(request: ExplainRequest):
+    """
+    计算 Integrated Gradients 特征重要性，用于前端绘制热力图
+    """
+    try:
+        result = get_explanation(
+            feature_path=request.feature_path,
+            antibiotic=request.antibiotic,
+            isolate_ids=request.isolate_ids,
+            n_steps=request.n_steps
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"解释失败: {str(e)}"
         )
 
 

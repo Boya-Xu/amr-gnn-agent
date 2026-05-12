@@ -1,15 +1,16 @@
+# conf/explain.yaml
 data:
   run_id: 0
-  antimicrobial: "amikacin"
-  labels: "/pvol/data/ast_data_filter_duplicates_041223.csv"
-  root_dir: "/pvol/data/extracted_feats/kmer/combined_kmers"
-  input_dir: "${data.root_dir}/${data.run_id}/${data.antimicrobial}"
-  id_root_dir: ""
-  whole_ids: "${data.id_root_dir}/${data.run_id}/${data.antimicrobial}_whole.ids"
-  val_ids: "${data.id_root_dir}/${data.run_id}/${data.antimicrobial}_val.ids"
-  train_ids: "${data.id_root_dir}/${data.run_id}/${data.antimicrobial}_train.ids"
-  predict_ids: "${data.id_root_dir}/${data.run_id}/${data.antimicrobial}_predict.ids"
-  test_ids: "${data.id_root_dir}/${data.run_id}/${data.antimicrobial}_predict.ids"
+  antimicrobial: "vancomycin"
+  labels: "D:/project/resistance-prediction/amr-gnn-agent/data/ast_labels.csv"
+  root_dir: "D:/project/resistance-prediction/amr-gnn-agent/data/extracted_unitigs"
+  input_dir: "${data.root_dir}"
+  id_root_dir: "D:/project/resistance-prediction/amr-gnn-agent/data"
+  whole_ids: "${data.id_root_dir}/whole.ids"
+  predict_ids: "${data.id_root_dir}/predict.ids"
+  train_ids: ""
+  val_ids: ""
+  test_ids: ""
   retaining_pmille: 2
   use_decoupling: False
   use_class_weight: True
@@ -19,8 +20,8 @@ data:
 
 adj_matrix:
   use_precompute_matrix: True
-  file_path_1: ""
-  file_path_2: ""
+  file_path_1: "D:/project/resistance-prediction/amr-gnn-agent/data/fcgr_adj_matrix.csv"
+  file_path_2: "D:/project/resistance-prediction/amr-gnn-agent/data/snps_adj_matrix.csv"
 
 gnn:
   model_name: "GNN"
@@ -40,7 +41,7 @@ gnn:
 
 trainer:
   seed: 222
-  default_root_dir: "/mnt/experiments"
+  default_root_dir: "experiments"
   max_epochs: 200
   accelerator: "auto"
   devices: "auto"
@@ -49,13 +50,13 @@ trainer:
   strategy: "auto"
   precision: 32
   model_checkpoint:
-    dirpath: "${trainer.default_root_dir}/out/${trainer.logger.project_prefix}_${trainer.logger.name_prefix}/${data.antimicrobial}/${data.run_id}/"
+    dirpath: "${trainer.default_root_dir}/checkpoints"
     monitor: "val_loss"
     mode: "min"
     save_last: False
     save_top_k: 1
   logger:
-    save_dir: "${trainer.default_root_dir}/logger/${data.antimicrobial}/${data.run_id}"
+    save_dir: "${trainer.default_root_dir}/logger"
     project_prefix: "multi_wgs"
     project: "${trainer.logger.project_prefix}_${data.antimicrobial}"
     name_prefix: "6mer"
@@ -64,5 +65,8 @@ trainer:
 
 explainer:
   baseline: ""
-  out_fp: "IG_attributions.csv"
   n_steps: 50
+  out_fp: "experiments/explain/IG_attribution.csv"
+
+prediction:
+  outdir: "${trainer.model_checkpoint.dirpath}"
