@@ -1,5 +1,6 @@
 import os
 import requests
+import json
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langchain.tools import tool
@@ -19,10 +20,14 @@ def preprocess_fasta_tool(file_path: str) -> str:
     """
     url = "https://brick-glitch-sculptor.ngrok-free.dev/preprocess"
     try:
-        response = requests.post(url, json={"file_path": file_path})
+        with open(file_path, 'rb') as f:
+            files = {'file': (file_path, f, 'application/octet-stream')}
+            response = requests.post(url, files=files)
         if response.status_code == 200:
             return f"预处理成功，特征文件已就绪。详细信息: {response.text}"
-        return f"预处理失败，状态码: {response.status_code}"
+        return f"预处理失败，状态码: {response.status_code}, 详情: {response.text}"
+    except FileNotFoundError:
+        return f"文件未找到: {file_path}，请确认文件路径是否正确"
     except Exception as e:
         return f"调用预处理接口异常: {str(e)}"
 
@@ -34,14 +39,35 @@ def predict_amr_tool(antibiotic: str) -> str:
     """
     url = "http://127.0.0.1:8000/predict"
     try:
-        response = requests.post(url, json={"antibiotic": antibiotic})
+        response = requests.post(url, json={
+            "feature_path": "./data/extracted_unitigs",
+            "antibiotic": antibiotic
+        })
         if response.status_code == 200:
-            return f"预测完成。结果数据: {response.json()}"
-        return f"预测失败，状态码: {response.status_code}"
+            return response.text
+        return f"预测失败，状态码: {response.status_code}, 详情: {response.text}"
     except Exception as e:
         return f"调用预测接口异常: {str(e)}"
 
-tools = [preprocess_fasta_tool, predict_amr_tool]
+@tool
+def explain_amr_tool(feature_path: str = "./data/extracted_unitigs", antibiotic: str = "vancomycin") -> str:
+    """
+    当用户要求解释耐药性原因、想看热力图或IG分数时调用此工具。
+    必须在预测完成后才能调用。
+    """
+    url = "http://127.0.0.1:8000/explain"
+    try:
+        response = requests.post(url, json={
+            "feature_path": feature_path,
+            "antibiotic": antibiotic
+        })
+        if response.status_code == 200:
+            return response.text
+        return f"解释分析失败，状态码: {response.status_code}, 详情: {response.text}"
+    except Exception as e:
+        return f"调用解释接口异常: {str(e)}"
+
+tools = [preprocess_fasta_tool, predict_amr_tool, explain_amr_tool]
 
 # ================= 3. 定义 Agent 大脑 =================
 system_prompt = """
@@ -50,27 +76,43 @@ system_prompt = """
 1. 当用户提供文件路径并要求分析时，你必须先调用 preprocess_fasta_tool。
 2. 只有在预处理成功后，你才能调用 predict_amr_tool 进行耐药性预测。
 3. 获取预测结果后，请用清晰、专业的中文总结结果（包括耐药概率和最终判定）。
+4. 如果用户想看热力图或解释耐药原因，调用 explain_amr_tool。
 """
 
-# LangChain 1.x 使用 create_agent，参数为 model, tools, system_prompt
 agent = create_agent(
     model=llm,
     tools=tools,
     system_prompt=system_prompt
 )
 
-# 封装一个对外的函数
-def chat_with_agent(user_message: str) -> str:
+def chat_with_agent(user_message: str) -> dict:
     try:
-        # create_agent 返回的是 CompiledStateGraph，用 invoke
         response = agent.invoke({"messages": [{"role": "user", "content": user_message}]})
-        # 提取最后一条 AI 消息
         messages = response.get("messages", [])
+        reply = ""
         if messages:
             last_message = messages[-1]
             if hasattr(last_message, 'content'):
-                return last_message.content
-            return str(last_message)
-        return "Agent 未返回有效响应"
+                reply = last_message.content
+            else:
+                reply = str(last_message)
+
+        chart_data = None
+        for msg in messages:
+            if hasattr(msg, 'name') and msg.name == "predict_amr_tool":
+                try:
+                    chart_data = json.loads(msg.content)
+                except Exception:
+                    pass
+
+        explain_data = None
+        for msg in messages:
+            if hasattr(msg, 'name') and msg.name == "explain_amr_tool":
+                try:
+                    explain_data = json.loads(msg.content)
+                except Exception:
+                    pass
+
+        return {"reply": reply, "chart_data": chart_data, "explain_data": explain_data}
     except Exception as e:
-        return f"Agent 思考过程中出现错误: {str(e)}"
+        return {"reply": f"Agent 思考过程中出现错误: {str(e)}", "chart_data": None, "explain_data": None}

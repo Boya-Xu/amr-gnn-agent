@@ -56,9 +56,14 @@ async def predict(request: PredictRequest):
 
 @app.post("/api/chat")
 async def agent_chat_endpoint(request: ChatRequest):
-    # 调用 Agent
-    reply = chat_with_agent(request.message)
-    return {"status": "success", "reply": reply}
+    # 调用 Agent，拿到包含文字和数据的字典
+    agent_result = chat_with_agent(request.message)
+    return {
+        "status": "success",
+        "reply": agent_result["reply"],
+        "chart_data": agent_result["chart_data"],
+        "explain_data": agent_result["explain_data"]
+    }
 
 # 启动服务
 if __name__ == "__main__":
