@@ -11,7 +11,6 @@ os.environ["OPENAI_BASE_URL"] = "https://api.deepseek.com/v1"
 
 llm = ChatOpenAI(model="deepseek-chat", temperature=0)
 
-
 # ================= 2. 定义工具 (Tools) =================
 @tool
 def preprocess_fasta_tool(file_path: str) -> str:
@@ -21,7 +20,6 @@ def preprocess_fasta_tool(file_path: str) -> str:
     """
     url = "https://brick-glitch-sculptor.ngrok-free.dev/preprocess"
     try:
-        # 读取本地文件，以 multipart/form-data 格式上传
         with open(file_path, 'rb') as f:
             files = {'file': (file_path, f, 'application/octet-stream')}
             response = requests.post(url, files=files)
@@ -33,31 +31,43 @@ def preprocess_fasta_tool(file_path: str) -> str:
     except Exception as e:
         return f"调用预处理接口异常: {str(e)}"
 
-
 @tool
 def predict_amr_tool(antibiotic: str) -> str:
     """
-    当用户询问关于某种抗生素的耐药性预测结果时调用此工具。
+    当用户询问关于某种抗生素（如 'vancomycin' 或 '万古霉素'）的耐药性预测结果时调用此工具。
     注意：必须在预处理成功后才能调用此工具。
-    用户说的“万古霉素”对应参数 antibiotic="vancomycin"
     """
     url = "http://127.0.0.1:8000/predict"
     try:
-        # 明确传 feature_path，并使用 B 接口期望的 antimicrobial 字段
         response = requests.post(url, json={
             "feature_path": "./data/extracted_unitigs",
-            "antimicrobial": antibiotic
+            "antibiotic": antibiotic
         })
         if response.status_code == 200:
-            # 返回接口原始 JSON 文本，方便后续提取 chart_data
             return response.text
-        else:
-            return f"预测失败，状态码: {response.status_code}, 详情: {response.text}"
+        return f"预测失败，状态码: {response.status_code}, 详情: {response.text}"
     except Exception as e:
         return f"调用预测接口异常: {str(e)}"
 
+@tool
+def explain_amr_tool(feature_path: str = "./data/extracted_unitigs", antibiotic: str = "vancomycin") -> str:
+    """
+    当用户要求解释耐药性原因、想看热力图或IG分数时调用此工具。
+    必须在预测完成后才能调用。
+    """
+    url = "http://127.0.0.1:8000/explain"
+    try:
+        response = requests.post(url, json={
+            "feature_path": feature_path,
+            "antibiotic": antibiotic
+        })
+        if response.status_code == 200:
+            return response.text
+        return f"解释分析失败，状态码: {response.status_code}, 详情: {response.text}"
+    except Exception as e:
+        return f"调用解释接口异常: {str(e)}"
 
-tools = [preprocess_fasta_tool, predict_amr_tool]
+tools = [preprocess_fasta_tool, predict_amr_tool, explain_amr_tool]
 
 # ================= 3. 定义 Agent 大脑 =================
 system_prompt = """
@@ -66,6 +76,7 @@ system_prompt = """
 1. 当用户提供文件路径并要求分析时，你必须先调用 preprocess_fasta_tool。
 2. 只有在预处理成功后，你才能调用 predict_amr_tool 进行耐药性预测。
 3. 获取预测结果后，请用清晰、专业的中文总结结果（包括耐药概率和最终判定）。
+4. 如果用户想看热力图或解释耐药原因，调用 explain_amr_tool。
 """
 
 agent = create_agent(
@@ -73,7 +84,6 @@ agent = create_agent(
     tools=tools,
     system_prompt=system_prompt
 )
-
 
 def chat_with_agent(user_message: str) -> dict:
     try:
@@ -95,6 +105,14 @@ def chat_with_agent(user_message: str) -> dict:
                 except Exception:
                     pass
 
-        return {"reply": reply, "chart_data": chart_data}
+        explain_data = None
+        for msg in messages:
+            if hasattr(msg, 'name') and msg.name == "explain_amr_tool":
+                try:
+                    explain_data = json.loads(msg.content)
+                except Exception:
+                    pass
+
+        return {"reply": reply, "chart_data": chart_data, "explain_data": explain_data}
     except Exception as e:
-        return {"reply": f"Agent 思考过程中出现错误: {str(e)}", "chart_data": None}
+        return {"reply": f"Agent 思考过程中出现错误: {str(e)}", "chart_data": None, "explain_data": None}
