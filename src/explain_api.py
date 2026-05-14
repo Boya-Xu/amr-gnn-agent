@@ -16,29 +16,29 @@ def get_explanation(feature_path: str, antibiotic: str, isolate_ids: list = None
     计算 Integrated Gradients 特征重要性（优化版：只计算指定菌株的子图）
     
     Args:
-        feature_path: 特征文件夹路径
+        feature_path: 特征文件夹路径（可以是相对路径或绝对路径）
         antibiotic: 抗生素名称
         isolate_ids: 可选，指定要解释的菌株ID列表（如果不指定，只返回第一个）
         n_steps: IG 积分步数（默认 50，可适当降低到 20-30 提升速度）
     
     Returns:
         dict: {
-            "isolate_ids": [...],
-            "attributions": [...],
-            "attribution_shape": [...]
+            "isolate_ids": [菌株ID列表],
+            "attributions": [[特征重要性分数列表], ...],  # 每个菌株对应一个列表，长度为特征维度
+            "attribution_shape": [len(isolate_ids), 特征维度]
         }
     """
     import torch
     import traceback
 
-    # 项目根目录的绝对路径
-    PROJECT_ROOT = "D:/project/resistance-prediction/amr-gnn-agent"
+    # 动态获取项目根目录（假设当前文件在 src/ 下，项目根目录为 src 的上一级）
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     # 1. 构建临时配置（只覆盖需要动态传入的参数）
     overrides = [
         f"data.input_dir={feature_path}",
         f"data.antimicrobial={antibiotic}",
-        f"trainer.model_checkpoint.dirpath={PROJECT_ROOT}/experiments/checkpoints",
+        f"trainer.model_checkpoint.dirpath={os.path.join(project_root, 'experiments/checkpoints')}",
     ]
 
     temp_ids_file = None
@@ -49,7 +49,7 @@ def get_explanation(feature_path: str, antibiotic: str, isolate_ids: list = None
         overrides.append(f"data.predict_ids={temp_ids_file}")
 
     try:
-        # 2. 加载 Hydra 配置
+        # 2. 加载 Hydra 配置（使用 explain.yaml，内部路径应为相对路径）
         print("1. 加载 Hydra 配置...")
         with initialize(version_base=None, config_path="../conf"):
             cfg = compose(config_name="explain", overrides=overrides)
@@ -122,7 +122,7 @@ def get_explanation(feature_path: str, antibiotic: str, isolate_ids: list = None
         edge_index_1 = dataset.edge_index_1.to(device)
         edge_index_2 = dataset.edge_index_2.to(device)
         
-        # 关键：构建子图（包含目标节点及其一阶邻居）
+        # 构建子图（包含目标节点及其一阶邻居）
         target_set = set(target_indices)
         
         # 找出所有与目标节点相邻的节点（一阶邻居）
@@ -186,19 +186,17 @@ def get_explanation(feature_path: str, antibiotic: str, isolate_ids: list = None
         )
         print("   ✓ IG 计算完成")
 
-        # 9. 只返回目标节点的 attribution
+        # 9. 只返回目标节点的 attribution（完整特征重要性向量）
         attribution = attribution_full[new_target_indices]
-        attributions_np = attribution.detach().cpu().numpy()
-        
-        # 按样本汇总特征重要性（取均值）
-        sample_attributions = np.mean(attributions_np, axis=1).tolist()
-        
+        attributions_np = attribution.detach().cpu().numpy()   # shape: (len(target_indices), feature_dim)
+
         # 获取对应的 isolate_ids
         result_isolate_ids = [isolate_codes[idx] for idx in target_indices]
 
+        # 直接返回完整向量，不对特征维度做任何压缩
         return {
             "isolate_ids": result_isolate_ids,
-            "attributions": sample_attributions,
+            "attributions": attributions_np.tolist(),          # 每个菌株的完整特征分数列表
             "attribution_shape": list(attributions_np.shape)
         }
 
