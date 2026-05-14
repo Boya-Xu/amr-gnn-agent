@@ -8,18 +8,19 @@ from captum.attr import IntegratedGradients
 from hydra import compose, initialize
 from src.models import GNNModel
 from src.utils import create_graph_dataset
+import traceback
 
 
 def get_explanation(feature_path: str, antibiotic: str, isolate_ids: list = None, n_steps: int = 50) -> dict:
     """
-    计算 Integrated Gradients 特征重要性
-
+    计算 Integrated Gradients 特征重要性（优化版：只计算指定菌株的子图）
+    
     Args:
         feature_path: 特征文件夹路径
         antibiotic: 抗生素名称
-        isolate_ids: 可选，指定要解释的菌株ID列表
-        n_steps: IG 积分步数
-
+        isolate_ids: 可选，指定要解释的菌株ID列表（如果不指定，只返回第一个）
+        n_steps: IG 积分步数（默认 50，可适当降低到 20-30 提升速度）
+    
     Returns:
         dict: {
             "isolate_ids": [...],
@@ -58,7 +59,7 @@ def get_explanation(feature_path: str, antibiotic: str, isolate_ids: list = None
         print("2. 创建数据集...")
         dataset, adj_mat_1, adj_mat_2 = create_graph_dataset(cfg)
         isolate_codes = dataset.isolate_codes
-        print(f"   ✓ 数据集创建成功，节点数: {dataset.x.shape[0]}")
+        print(f"   ✓ 数据集创建成功，总节点数: {dataset.x.shape[0]}")
 
         # 4. 确定设备
         if torch.cuda.is_available():
@@ -96,41 +97,107 @@ def get_explanation(feature_path: str, antibiotic: str, isolate_ids: list = None
         model.to(device)
         print("   ✓ 模型加载成功")
 
-        # 6. 准备数据
-        print("4. 准备数据...")
-        x = dataset.x.to(device)
+        # 6. 确定要解释的节点索引（核心优化：只计算用户指定的菌株）
+        print("4. 确定要解释的菌株...")
+        if isolate_ids:
+            target_indices = []
+            for target_id in isolate_ids:
+                try:
+                    idx = list(isolate_codes).index(target_id)
+                    target_indices.append(idx)
+                except ValueError:
+                    print(f"   警告: 菌株 {target_id} 不在数据集中，已跳过")
+            
+            if not target_indices:
+                target_indices = [0]
+                print("   警告: 未找到指定菌株，将使用第一个菌株")
+        else:
+            target_indices = [0]
+            print("   未指定菌株，将只计算第一个菌株")
+        
+        print(f"   将计算 {len(target_indices)} 个菌株的 attribution")
+        
+        # 7. 获取所有节点特征和边索引（全图）
+        x_full = dataset.x.to(device)
         edge_index_1 = dataset.edge_index_1.to(device)
         edge_index_2 = dataset.edge_index_2.to(device)
-        print(f"   特征形状: {x.shape}")
-
-        # 7. 计算 Integrated Gradients
-        print("5. 计算 Integrated Gradients...")
+        
+        # 关键：构建子图（包含目标节点及其一阶邻居）
+        target_set = set(target_indices)
+        
+        # 找出所有与目标节点相邻的节点（一阶邻居）
+        neighbor_indices = set()
+        for edge in range(edge_index_1.shape[1]):
+            src = edge_index_1[0, edge].item()
+            dst = edge_index_1[1, edge].item()
+            if src in target_set or dst in target_set:
+                neighbor_indices.add(src)
+                neighbor_indices.add(dst)
+        
+        # 合并目标节点和邻居节点
+        subgraph_indices = list(target_set.union(neighbor_indices))
+        subgraph_indices.sort()
+        
+        # 创建原始索引到子图索引的映射
+        old_to_new = {old: new for new, old in enumerate(subgraph_indices)}
+        
+        # 提取子图节点特征
+        x = x_full[subgraph_indices]
+        
+        # 重新映射边索引到子图
+        def remap_edge_index(edge_index):
+            edges = []
+            for i in range(edge_index.shape[1]):
+                src = edge_index[0, i].item()
+                dst = edge_index[1, i].item()
+                if src in old_to_new and dst in old_to_new:
+                    edges.append([old_to_new[src], old_to_new[dst]])
+            if edges:
+                return torch.tensor(edges, device=device).t().contiguous()
+            else:
+                return torch.zeros((2, 0), dtype=torch.long, device=device)
+        
+        edge_index_1_sub = remap_edge_index(edge_index_1)
+        edge_index_2_sub = remap_edge_index(edge_index_2)
+        
+        # 获取子图中目标节点的新索引
+        new_target_indices = [old_to_new[idx] for idx in target_indices]
+        
+        print(f"   子图节点数: {x.shape[0]}, 目标节点数: {len(new_target_indices)}")
+        
+        # 8. 计算 Integrated Gradients（只对子图中的目标节点）
+        print(f"5. 计算 Integrated Gradients (n_steps={n_steps})...")
         dl = IntegratedGradients(model)
 
         # 处理 baseline
         if hasattr(cfg.explainer, 'baseline') and cfg.explainer.baseline and cfg.explainer.baseline.endswith(".pt"):
             baseline = torch.load(cfg.explainer.baseline).to(device)
         else:
-            baseline = None  # Captum 默认使用零基线
+            baseline = torch.zeros_like(x)
+            print("   使用零基线")
 
-        attribution = dl.attribute(
+        attribution_full = dl.attribute(
             x,
             target=None,
             baselines=baseline,
-            additional_forward_args=(edge_index_1, edge_index_2),
-            internal_batch_size=min(x.size(0), 32),
+            additional_forward_args=(edge_index_1_sub, edge_index_2_sub),
+            internal_batch_size=min(x.size(0), 16),
             n_steps=n_steps,
         )
         print("   ✓ IG 计算完成")
 
-        # 8. 整理结果
+        # 9. 只返回目标节点的 attribution
+        attribution = attribution_full[new_target_indices]
         attributions_np = attribution.detach().cpu().numpy()
-
+        
         # 按样本汇总特征重要性（取均值）
         sample_attributions = np.mean(attributions_np, axis=1).tolist()
+        
+        # 获取对应的 isolate_ids
+        result_isolate_ids = [isolate_codes[idx] for idx in target_indices]
 
         return {
-            "isolate_ids": list(isolate_codes),
+            "isolate_ids": result_isolate_ids,
             "attributions": sample_attributions,
             "attribution_shape": list(attributions_np.shape)
         }
