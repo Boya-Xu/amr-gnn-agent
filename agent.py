@@ -34,15 +34,17 @@ def preprocess_fasta_tool(file_path: str) -> str:
 @tool
 def predict_amr_tool(antibiotic: str) -> str:
     """
-    当用户询问关于某种抗生素（如 'vancomycin' 或 '万古霉素'）的耐药性预测结果时调用此工具。
-    注意：必须在预处理成功后才能调用此工具。
+    预测指定抗生素的耐药性。仅用于预测，不解释原因。
+    参数 antibiotic: 抗生素名称，如 'vancomycin'、'penicillin'。
+    注意：用户问“预测”、“耐药性”时使用此工具。用户问“为什么”、“解释”、“热力图”时绝对不能使用！
     """
     url = "http://127.0.0.1:8000/predict"
     try:
+        # 增加了超时时间，防止计算慢导致报错
         response = requests.post(url, json={
             "feature_path": "./data/extracted_unitigs",
             "antibiotic": antibiotic
-        })
+        }, timeout=30)
         if response.status_code == 200:
             return response.text
         return f"预测失败，状态码: {response.status_code}, 详情: {response.text}"
@@ -50,17 +52,22 @@ def predict_amr_tool(antibiotic: str) -> str:
         return f"调用预测接口异常: {str(e)}"
 
 @tool
-def explain_amr_tool(feature_path: str = "./data/extracted_unitigs", antibiotic: str = "vancomycin") -> str:
+def explain_amr_tool(antibiotic: str, isolate_ids: list) -> str:
     """
-    当用户要求解释耐药性原因、想看热力图或IG分数时调用此工具。
-    必须在预测完成后才能调用。
+    解释指定菌株耐药的原因，返回热力图数据。仅用于解释，不预测耐药性。
+    参数 antibiotic: 抗生素名称，如 'vancomycin'。
+    参数 isolate_ids: 需要解释的菌株ID列表，如 ['1352.10008', '1352.10011']。
+    注意：用户问“为什么耐药”、“解释原因”、“热力图”、“特征重要性”时必须调用此工具！
     """
     url = "http://127.0.0.1:8000/explain"
     try:
+        # 关键修改：增加了超时时间（2分钟），因为模型解释计算很慢
         response = requests.post(url, json={
-            "feature_path": feature_path,
-            "antibiotic": antibiotic
-        })
+            "feature_path": "./data/extracted_unitigs",
+            "antibiotic": antibiotic,
+            "isolate_ids": isolate_ids,
+            "n_steps": 20  # B建议的优化参数，可加快速度
+        }, timeout=300)
         if response.status_code == 200:
             return response.text
         return f"解释分析失败，状态码: {response.status_code}, 详情: {response.text}"
@@ -71,12 +78,21 @@ tools = [preprocess_fasta_tool, predict_amr_tool, explain_amr_tool]
 
 # ================= 3. 定义 Agent 大脑 =================
 system_prompt = """
-你是一个专业的基因组抗菌药物耐药性 (AMR) 分析助手。
-你的工作流程如下：
-1. 当用户提供文件路径并要求分析时，你必须先调用 preprocess_fasta_tool。
-2. 只有在预处理成功后，你才能调用 predict_amr_tool 进行耐药性预测。
-3. 获取预测结果后，请用清晰、专业的中文总结结果（包括耐药概率和最终判定）。
-4. 如果用户想看热力图或解释耐药原因，调用 explain_amr_tool。
+你是一个专业的基因组抗菌药物耐药性 (AMR) 分析助手。你必须严格遵守以下规则：
+
+## 工具调用规则
+1. 用户问“预测”、“耐药性” → 调用 preprocess_fasta_tool（如需要），然后调用 predict_amr_tool。
+2. 用户问“为什么”、“解释”、“热力图”、“特征重要性”、“原因” → 直接调用 explain_amr_tool。
+   - 必须从用户问题中提取菌株ID，放入 isolate_ids 数组。
+   - 绝对不能调用 predict_amr_tool 来处理解释性问题。
+3. 用户问“分析”或“全面评估” → 依次调用 predict_amr_tool 和 explain_amr_tool。
+
+## 参数传递规则
+- predict_amr_tool 的 antibiotic 参数只接受抗生素名称（如 'vancomycin'），绝不能传入菌株ID。
+- explain_amr_tool 的 isolate_ids 参数必须是菌株ID组成的数组（如 ['1352.10008']），不能是单个字符串。
+
+## 输出规则
+获取结果后，请用清晰、专业的中文总结。
 """
 
 agent = create_agent(
@@ -84,6 +100,7 @@ agent = create_agent(
     tools=tools,
     system_prompt=system_prompt
 )
+
 
 def chat_with_agent(user_message: str) -> dict:
     try:
@@ -98,15 +115,16 @@ def chat_with_agent(user_message: str) -> dict:
                 reply = str(last_message)
 
         chart_data = None
+        explain_data = None
+
         for msg in messages:
+            # 提取预测数据
             if hasattr(msg, 'name') and msg.name == "predict_amr_tool":
                 try:
                     chart_data = json.loads(msg.content)
                 except Exception:
                     pass
-
-        explain_data = None
-        for msg in messages:
+            # 提取解释数据
             if hasattr(msg, 'name') and msg.name == "explain_amr_tool":
                 try:
                     explain_data = json.loads(msg.content)
