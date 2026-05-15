@@ -61,15 +61,48 @@ async def explain(request: ExplainRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"解释分析失败: {str(e)}")
 
+
+import asyncio
+
+
 @app.post("/api/chat")
 async def agent_chat_endpoint(request: ChatRequest):
-    agent_result = chat_with_agent(request.message)
-    return {
-        "status": "success",
-        "reply": agent_result["reply"],
-        "chart_data": agent_result["chart_data"],
-        "explain_data": agent_result["explain_data"]
-    }
+    explain_data = None
+
+    # 第一步：在独立线程中调 /explain，避免阻塞事件循环
+    try:
+        import requests as req
+        loop = asyncio.get_running_loop()
+        explain_response = await loop.run_in_executor(
+            None,
+            lambda: req.post(
+                "http://127.0.0.1:8000/explain",
+                json={
+                    "feature_path": "./data/extracted_unitigs",
+                    "antibiotic": "vancomycin",
+                    "isolate_ids": ["1352.10008"],
+                    "n_steps": 20
+                },
+                timeout=300
+            )
+        )
+        if explain_response.status_code == 200:
+            explain_data = explain_response.json()
+            print(f"✅ 成功获取 explain_data")
+    except Exception as e:
+        print(f"⚠️ 获取 explain_data 失败: {e}")
+
+    # 第二步：调 Agent 获取文字回复
+    try:
+        agent_result = chat_with_agent(request.message)
+        return {
+            "status": "success",
+            "reply": agent_result.get("reply", ""),
+            "chart_data": agent_result.get("chart_data"),
+            "explain_data": explain_data
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Agent 运行出错: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
