@@ -1,0 +1,17 @@
+[project]
+name = "amr-agent-frontend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.136.1",
+    "matplotlib>=3.10.9",
+    "pandas>=2.3.3",
+    "plotly>=6.7.0",
+    "python-multipart>=0.0.27",
+    "requests>=2.33.1",
+    "streamlit>=1.57.0",
+    "torch>=2.11.0",
+    "uvicorn>=0.46.0",
+]
