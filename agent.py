@@ -59,10 +59,22 @@ def explain_amr_tool(antibiotic: str, isolate_ids: list) -> str:
     解释指定菌株耐药的原因，返回热力图数据。仅用于解释，不预测耐药性。
     参数 antibiotic: 抗生素名称，如 'vancomycin'。
     参数 isolate_ids: 需要解释的菌株ID列表，如 ['1352.10008', '1352.10011']。
-    注意：用户问"为什么耐药"、"解释原因"、"热力图"、"特征重要性"时必须调用此工具！
+    注意：用户问“为什么耐药”、“解释原因”、“热力图”、“特征重要性”时必须调用此工具！
     """
-    # 不真正发请求，只返回一个标记，由 app.py 统一处理
-    return json.dumps({"status": "queued", "message": "解释请求已提交，数据正在生成中"})
+    url = "http://127.0.0.1:8000/explain"
+    try:
+        response = requests.post(url, json={
+            "feature_path": "./data/extracted_unitigs",
+            "antibiotic": antibiotic,
+            "isolate_ids": isolate_ids,
+            "n_steps": 20
+        }, timeout=(10, 300))
+
+        if response.status_code == 200:
+            return response.text
+        return json.dumps({"error": f"解释分析失败，状态码: {response.status_code}"})
+    except Exception as e:
+        return json.dumps({"error": f"调用解释接口异常: {str(e)}"})
 
 
 tools = [preprocess_fasta_tool, predict_amr_tool, explain_amr_tool]
