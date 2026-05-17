@@ -59,17 +59,16 @@ def explain_amr_tool(antibiotic: str, isolate_ids: list) -> str:
     解释指定菌株耐药的原因，返回热力图数据。仅用于解释，不预测耐药性。
     参数 antibiotic: 抗生素名称，如 'vancomycin'。
     参数 isolate_ids: 需要解释的菌株ID列表，如 ['1352.10008', '1352.10011']。
-    注意：用户问“为什么耐药”、“解释原因”、“热力图”、“特征重要性”时必须调用此工具！
     """
     url = "http://127.0.0.1:8000/explain"
     try:
+        # 注意：IG 计算可能耗时较长，建议 B 优化性能或使用异步模式
         response = requests.post(url, json={
             "feature_path": "./data/extracted_unitigs",
             "antibiotic": antibiotic,
             "isolate_ids": isolate_ids,
             "n_steps": 20
-        }, timeout=(10, 300))
-
+        }, timeout=(10, 900))  # 连接10秒，读取900秒
         if response.status_code == 200:
             return response.text
         return json.dumps({"error": f"解释分析失败，状态码: {response.status_code}"})
@@ -126,6 +125,11 @@ def chat_with_agent(user_message: str) -> dict:
             if hasattr(msg, 'name') and msg.name == "predict_amr_tool":
                 try:
                     chart_data = json.loads(msg.content)
+                except Exception:
+                    pass
+            if hasattr(msg, 'name') and msg.name == "explain_amr_tool":
+                try:
+                    explain_data = json.loads(msg.content)
                 except Exception:
                     pass
 
