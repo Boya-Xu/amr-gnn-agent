@@ -1,11 +1,16 @@
+# ============== 第一行就放路径修复，绝对不能动顺序 ==============
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# ============== 后面才是所有import ==============
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List
 import warnings
-from agent import chat_with_agent
-
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="pkg_resources")
 
+from agent import chat_with_agent
 from src.predict import get_prediction
 
 class ChatRequest(BaseModel):

@@ -1,10 +1,9 @@
-FROM python:3.11-slim
+FROM python:3.11
 
 WORKDIR /app
 
+COPY pyproject.toml uv.lock ./
 RUN pip install --no-cache-dir uv
-
-COPY pyproject.toml uv.lock* ./
 RUN uv sync --no-dev --frozen
 
 COPY src/ ./src/

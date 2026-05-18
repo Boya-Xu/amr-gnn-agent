@@ -1,7 +1,8 @@
 @echo off
 chcp 65001 >nul
+title AMR-GNN后端服务
 echo ======================================
-echo AMR-GNN 抗生素耐药性预测服务
+echo AMR-GNN 后端API服务启动中...
 echo ======================================
 echo.
 
@@ -28,15 +29,15 @@ uv sync
 
 :: 启动服务
 echo.
-echo [4/4] 服务启动成功！
-echo 浏览器自动打开：http://localhost:8000/docs
+echo [4/4] 后端服务启动成功！
+echo API文档地址：http://localhost:8000/docs
 echo ======================================
 echo.
 
-:: 自动打开浏览器
+:: 自动打开API文档
 start http://localhost:8000/docs
 
-:: 启动API服务
+:: 启动API服务（你验证过的正常命令）
 uv run python src/api.py
 
 pause

@@ -7,5 +7,3 @@ services:
       - ./data:/app/data
       - ./experiments/checkpoints:/app/experiments/checkpoints
     restart: unless-stopped
-    environment:
-      - PYTHONUNBUFFERED=1
