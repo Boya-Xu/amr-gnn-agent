@@ -221,3 +221,5 @@ scripts/
 demo/
 outputs/
 tmp/
+# 解释接口缓存目录
+.explanation_cache/
