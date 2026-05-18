@@ -38,19 +38,16 @@ def predict_amr_tool(antibiotic: str) -> str:
     """
     预测指定抗生素的耐药性。仅用于预测，不解释原因。
     参数 antibiotic: 抗生素名称，如 'vancomycin'、'penicillin'。
-    注意：用户问“预测”、“耐药性”时使用此工具。用户问“为什么”、“解释”、“热力图”时绝对不能使用！
     """
-    url = "http://127.0.0.1:8000/predict"
     try:
-        response = requests.post(url, json={
-            "feature_path": "./data/extracted_unitigs",
-            "antibiotic": antibiotic
-        }, timeout=30)
-        if response.status_code == 200:
-            return response.text
-        return f"预测失败，状态码: {response.status_code}, 详情: {response.text}"
+        from src.predict import get_prediction
+        result = get_prediction(
+            feature_path="./data/extracted_unitigs",
+            antibiotic=antibiotic
+        )
+        return json.dumps(result)
     except Exception as e:
-        return f"调用预测接口异常: {str(e)}"
+        return json.dumps({"error": f"调用预测接口异常: {str(e)}"})
 
 
 @tool
@@ -60,18 +57,15 @@ def explain_amr_tool(antibiotic: str, isolate_ids: list) -> str:
     参数 antibiotic: 抗生素名称，如 'vancomycin'。
     参数 isolate_ids: 需要解释的菌株ID列表，如 ['1352.10008', '1352.10011']。
     """
-    url = "http://127.0.0.1:8000/explain"
     try:
-        # 注意：IG 计算可能耗时较长，建议 B 优化性能或使用异步模式
-        response = requests.post(url, json={
-            "feature_path": "./data/extracted_unitigs",
-            "antibiotic": antibiotic,
-            "isolate_ids": isolate_ids,
-            "n_steps": 20
-        }, timeout=(10, 900))  # 连接10秒，读取900秒
-        if response.status_code == 200:
-            return response.text
-        return json.dumps({"error": f"解释分析失败，状态码: {response.status_code}"})
+        from src.explain_api import get_explanation
+        result = get_explanation(
+            feature_path="./data/extracted_unitigs",
+            antibiotic=antibiotic,
+            isolate_ids=isolate_ids,
+            n_steps=20
+        )
+        return json.dumps(result)
     except Exception as e:
         return json.dumps({"error": f"调用解释接口异常: {str(e)}"})
 
