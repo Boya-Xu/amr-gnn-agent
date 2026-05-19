@@ -25,15 +25,19 @@ cd frontend
 uv sync >nul
 cd ..
 
-:: ========== 3. 启动后端服务（后台运行，不打开API页面） ==========
+:: ========== 3. 启动后端服务 ==========
 echo [3/5] 启动后端核心服务...
-start "🔧 后端服务（请勿关闭）" cmd /k "uv run python src/api.py"
+start "🔧 后端服务（请勿关闭）" cmd /k "uv run uvicorn app:app --host 0.0.0.0 --port 8000"
 
-:: 等待后端启动完成（足够时间，避免演示时出错）
+:: 等待后端启动完成
 timeout /t 8 /nobreak >nul
 
-:: ========== 4. 启动前端服务（固定端口，禁止自动开页面） ==========
-echo [4/5] 启动前端演示界面...
+:: ========== 4. 自动释放8502端口（已修正，无报错） ==========
+echo [4/5] 清理前端端口...
+powershell -Command "$process_id = (netstat -ano | findstr :8502 | findstr LISTENING | ForEach-Object { $_.Split()[-1] }); if ($process_id) { taskkill /F /PID $process_id | Out-Null; Write-Host '✅ 已释放8502端口' } else { Write-Host '✅ 8502端口空闲' }"
+
+:: 启动前端服务（固定用8502端口）
+echo 启动前端演示界面...
 start "🎨 前端服务（请勿关闭）" cmd /k "cd frontend && uv run streamlit run frontend.py --server.headless true --server.port 8502"
 
 :: 等待前端启动完成
