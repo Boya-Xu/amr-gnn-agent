@@ -2,10 +2,10 @@
 data:
   run_id: 0
   antimicrobial: "vancomycin"
-  labels: "D:/project/resistance-prediction/amr-gnn-agent/data/ast_labels.csv"
-  root_dir: "D:/project/resistance-prediction/amr-gnn-agent/data/extracted_unitigs"
+  labels: "data/ast_labels.csv"
+  root_dir: "data/extracted_unitigs"
   input_dir: "${data.root_dir}"
-  id_root_dir: "D:/project/resistance-prediction/amr-gnn-agent/data"
+  id_root_dir: "data"
   whole_ids: "${data.id_root_dir}/whole.ids"
   predict_ids: "${data.id_root_dir}/predict.ids"
   train_ids: ""
@@ -14,14 +14,14 @@ data:
   retaining_pmille: 2
   use_decoupling: False
   use_class_weight: True
-  decoupling_matrix: "/pvol/data/mlst_decoupling_mat.csv"
+  decoupling_matrix: "/pvol/data/mlst_decoupling_mat.csv"  # 这个暂时不改，未使用
   no_edge: False
   save_adj_matrix: False
 
 adj_matrix:
   use_precompute_matrix: True
-  file_path_1: "D:/project/resistance-prediction/amr-gnn-agent/data/fcgr_adj_matrix.csv"
-  file_path_2: "D:/project/resistance-prediction/amr-gnn-agent/data/snps_adj_matrix.csv"
+  file_path_1: "data/fcgr_adj_matrix.csv"
+  file_path_2: "data/snps_adj_matrix.csv"
 
 gnn:
   model_name: "GNN"

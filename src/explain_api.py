@@ -163,11 +163,8 @@ def load_model_and_config(feature_path: str, antibiotic: str, project_root: str,
         logger.info("加载Hydra配置...")
         with initialize(version_base=None, config_path="../conf"):
             cfg = compose(config_name="explain", overrides=overrides)
-<<<<<<< HEAD
         logger.info("配置加载成功")
-=======
         logger.info("✓ 配置加载成功")
-        # ====================== 只加这一段，其他所有代码都不动 ======================
         # 强制修正所有路径，彻底解决Hydra路径解析问题
         cfg.data.labels = os.path.join(project_root, "data", "ast_labels.csv")
         cfg.data.whole_ids = os.path.join(project_root, "data", "whole.ids")
@@ -176,10 +173,8 @@ def load_model_and_config(feature_path: str, antibiotic: str, project_root: str,
         cfg.data.predict_ids = os.path.join(project_root, "data", "predict.ids")
         cfg.adj_matrix.file_path_1 = os.path.join(project_root, "data", "fcgr_adj_matrix.csv")
         cfg.adj_matrix.file_path_2 = os.path.join(project_root, "data", "snps_adj_matrix.csv")
-        # ======================================================================
 
         # 创建数据集
->>>>>>> 2bda58edb9841ad8afffd130f6a4240669474a44
         logger.info("创建数据集...")
         dataset, adj_mat_1, adj_mat_2 = create_graph_dataset(cfg)
         logger.info(f"数据集创建成功，总节点数: {dataset.x.shape[0]}")
